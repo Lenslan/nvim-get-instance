@@ -1,0 +1,171 @@
+*verilog-hierarchy.txt*  Verilog 层级导航器
+
+==============================================================================
+目录                                            *verilog-hierarchy-contents*
+
+    1. 简介 ........................... |verilog-hierarchy-intro|
+    2. 安装 ........................... |verilog-hierarchy-installation|
+    3. 配置 ........................... |verilog-hierarchy-configuration|
+    4. 使用 ........................... |verilog-hierarchy-usage|
+    5. 命令 ........................... |verilog-hierarchy-commands|
+    6. 快捷键 ......................... |verilog-hierarchy-mappings|
+    7. 故障排除 ....................... |verilog-hierarchy-troubleshooting|
+
+==============================================================================
+1. 简介                                            *verilog-hierarchy-intro*
+
+Verilog 层级导航器是一个 Neovim 插件，用于帮助芯片设计工程师快速查看
+和导航 Verilog 模块的例化层级关系。
+
+功能特性：
+  - 使用 Tree-sitter 智能解析 Verilog 代码
+  - 在浮动窗口中显示模块例化列表
+  - 快速跳转到例化位置
+  - 支持 LSP 跳转到模块定义
+  - 自动回退到正则表达式解析
+
+==============================================================================
+2. 安装                                    *verilog-hierarchy-installation*
+
+使用 lazy.nvim: >
+    {
+      'your-username/verilog-hierarchy-navigator',
+      ft = { 'verilog', 'systemverilog' },
+      config = function()
+        require('verilog-hierarchy').setup()
+      end,
+    }
+<
+
+使用 packer.nvim: >
+    use {
+      'your-username/verilog-hierarchy-navigator',
+      ft = { 'verilog', 'systemverilog' },
+      config = function()
+        require('verilog-hierarchy').setup()
+      end,
+    }
+<
+
+==============================================================================
+3. 配置                                   *verilog-hierarchy-configuration*
+
+默认配置: >
+    require('verilog-hierarchy').setup({
+      keymaps = {
+        show_hierarchy = '<leader>vh',
+        jump_to_def = '<leader>vd',
+      },
+      ui = {
+        window_type = 'float',
+        width_ratio = 0.6,
+        height_ratio = 0.5,
+        border = 'rounded',
+      },
+      parser = {
+        use_treesitter = true,
+        fallback_regex = true,
+      },
+    })
+<
+
+配置选项:
+
+keymaps.show_hierarchy                    *verilog-hierarchy-show-hierarchy*
+    显示模块层级的快捷键
+    类型: string
+    默认: '<leader>vh'
+
+keymaps.jump_to_def                          *verilog-hierarchy-jump-to-def*
+    跳转到模块定义的快捷键
+    类型: string
+    默认: '<leader>vd'
+
+ui.window_type                                  *verilog-hierarchy-window-type*
+    窗口类型
+    类型: 'float' | 'split'
+    默认: 'float'
+
+ui.width_ratio                                  *verilog-hierarchy-width-ratio*
+    浮动窗口宽度比例
+    类型: number (0.0 - 1.0)
+    默认: 0.6
+
+ui.height_ratio                                *verilog-hierarchy-height-ratio*
+    浮动窗口高度比例
+    类型: number (0.0 - 1.0)
+    默认: 0.5
+
+ui.border                                            *verilog-hierarchy-border*
+    窗口边框样式
+    类型: 'none' | 'single' | 'double' | 'rounded'
+    默认: 'rounded'
+
+parser.use_treesitter                      *verilog-hierarchy-use-treesitter*
+    是否优先使用 Tree-sitter
+    类型: boolean
+    默认: true
+
+parser.fallback_regex                      *verilog-hierarchy-fallback-regex*
+    是否启用正则表达式回退
+    类型: boolean
+    默认: true
+
+==============================================================================
+4. 使用                                           *verilog-hierarchy-usage*
+
+显示模块例化层级:
+  1. 在 Verilog 文件中，按下 <leader>vh
+  2. 使用 j/k 或方向键上下移动
+  3. 按 Enter 跳转到选中的例化位置
+  4. 按 q 或 Esc 关闭窗口
+
+跳转到模块定义:
+  1. 将光标移动到模块名称上
+  2. 按下 <leader>vd
+  3. 如果 LSP 可用，会直接跳转到模块定义
+  4. 否则会在项目中搜索模块定义
+
+==============================================================================
+5. 命令                                        *verilog-hierarchy-commands*
+
+:VerilogHierarchy                                        *:VerilogHierarchy*
+    显示当前模块的例化层级
+
+:VerilogJumpDef                                            *:VerilogJumpDef*
+    跳转到光标下模块的定义
+
+==============================================================================
+6. 快捷键                                       *verilog-hierarchy-mappings*
+
+默认快捷键:
+
+<leader>vh                                    显示模块例化层级
+<leader>vd                                    跳转到模块定义
+
+在层级窗口中:
+
+j / k / ↑ / ↓                                 上下移动
+<CR>                                          跳转到选中的例化
+q / <Esc>                                     关闭窗口
+
+==============================================================================
+7. 故障排除                              *verilog-hierarchy-troubleshooting*
+
+Tree-sitter 不工作:
+  - 确保安装了 nvim-treesitter
+  - 运行 :TSInstall verilog
+  - 检查 :checkhealth nvim-treesitter
+
+LSP 不工作:
+  - 确保安装了 Verilog LSP 服务器
+  - 检查 :LspInfo
+  - 插件会自动回退到搜索方法
+
+找不到例化:
+  - 检查文件类型: :set filetype?
+  - 确保代码语法正确
+  - 尝试 :set filetype=verilog
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:
