@@ -1,160 +1,294 @@
--- parser.lua - Tree-sitter 解析器模块
 local M = {}
 
--- 检查 Tree-sitter 是否可用
--- @return boolean: Tree-sitter 是否已安装并可用
-function M.is_treesitter_available()
-  local ok, _ = pcall(require, 'nvim-treesitter')
-  if not ok then
-    return false
+-- Get LSP client for Verilog/SystemVerilog
+local function get_verilog_lsp_client(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+
+  -- Get all active clients for this buffer
+  local clients = vim.lsp.get_clients({ bufnr = bufnr })
+
+  -- Find a client that supports documentSymbol
+  for _, client in ipairs(clients) do
+    if client.server_capabilities.documentSymbolProvider then
+      return client
+    end
   end
-  
-  -- 检查是否有 verilog parser
-  local has_parser = pcall(vim.treesitter.get_parser, 0, 'verilog')
-  return has_parser
+
+  return nil
 end
 
--- 使用 Tree-sitter 解析例化
--- @param bufnr number: 缓冲区编号
--- @return table: 例化信息列表
+-- Parse document symbols to extract module instantiations
+local function parse_symbols(symbols, instantiations)
+  instantiations = instantiations or {}
+
+  if not symbols then
+    return instantiations
+  end
+
+  for _, symbol in ipairs(symbols) do
+    -- Check if this is a module instantiation
+    -- In Verilog LSP, module instances typically have kind 13 (Variable) or kind 8 (Instance)
+    -- We need to check the symbol name pattern to identify instantiations
+    local kind = symbol.kind
+    local name = symbol.name
+
+    -- LSP SymbolKind values:
+    -- 1=File, 2=Module, 3=Namespace, 4=Package, 5=Class, 6=Method, 7=Property,
+    -- 8=Field, 9=Constructor, 10=Enum, 11=Interface, 12=Function, 13=Variable,
+    -- 14=Constant, 15=String, 16=Number, 17=Boolean, 18=Array, 19=Object,
+    -- 20=Key, 21=Null, 22=EnumMember, 23=Struct, 24=Event, 25=Operator, 26=TypeParameter
+
+    -- For Verilog, module instances are often reported as:
+    -- - kind 13 (Variable) for instance declarations
+    -- - kind 8 (Field) for module instances
+    -- We'll look for symbols that have detail containing module type info
+
+    local is_instantiation = false
+    local module_type = nil
+    local instance_name = name
+
+    -- Check if the symbol has detail field (usually contains type info)
+    if symbol.detail then
+      -- Try to extract module type from detail
+      -- Common patterns: "module_name instance_name" or "Type: module_name"
+      local detail = symbol.detail
+
+      -- Pattern 1: "module_type instance_name" - extract module_type
+      module_type = detail:match("^([%w_]+)%s+[%w_]+")
+
+      if not module_type then
+        -- Pattern 2: "Type: module_type" or similar
+        module_type = detail:match("[Tt]ype:%s*([%w_]+)")
+      end
+
+      if not module_type then
+        -- Pattern 3: Just use the detail as module type
+        module_type = detail:match("^([%w_]+)")
+      end
+
+      if module_type then
+        is_instantiation = true
+      end
+    end
+
+    -- Alternative: Check if kind indicates instance (Field or Variable in module context)
+    if not is_instantiation and (kind == 8 or kind == 13) then
+      -- If we have children or specific patterns, it might be an instantiation
+      is_instantiation = true
+      module_type = symbol.detail or "unknown"
+    end
+
+    if is_instantiation and module_type then
+      -- Get the range
+      local range = symbol.range or symbol.location and symbol.location.range
+      if range then
+        table.insert(instantiations, {
+          module_type = module_type,
+          instance_name = instance_name,
+          line = range.start.line + 1, -- LSP uses 0-indexed, convert to 1-indexed
+          col = range.start.character + 1,
+          end_line = range["end"].line + 1,
+          end_col = range["end"].character + 1,
+        })
+      end
+    end
+
+    -- Recursively process children
+    if symbol.children then
+      parse_symbols(symbol.children, instantiations)
+    end
+  end
+
+  return instantiations
+end
+
+-- Parse using treesitter as fallback
 local function parse_with_treesitter(bufnr)
-  local parser = vim.treesitter.get_parser(bufnr, 'verilog')
-  local tree = parser:parse()[1]
-  local root = tree:root()
-  
-  -- Tree-sitter 查询字符串
-  local query_string = [[
-    (module_instantiation
-      module: (simple_identifier) @module.type
-      instance: (name_of_instance
-        (instance_identifier) @module.instance)
-    ) @instantiation
-  ]]
-  
-  local ok, query = pcall(vim.treesitter.query.parse, 'verilog', query_string)
+  local ok, ts_utils = pcall(require, "nvim-treesitter.ts_utils")
   if not ok then
     return nil
   end
-  
+
+  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, "verilog")
+  if not parser_ok then
+    return nil
+  end
+
+  local tree = parser:parse()[1]
+  local root = tree:root()
+
   local instantiations = {}
-  
-  for id, node, _ in query:iter_captures(root, bufnr, 0, -1) do
-    local capture_name = query.captures[id]
-    
-    if capture_name == 'instantiation' then
+
+  -- Traverse the tree to find module_instantiation nodes
+  local function traverse(node)
+    if node:type() == "module_instantiation" then
       local module_type = nil
       local instance_name = nil
-      local line, col = node:start()
-      
-      -- 提取模块类型和实例名称
-      for child_id, child_node, _ in query:iter_captures(node, bufnr, 0, -1) do
-        local child_capture = query.captures[child_id]
-        if child_capture == 'module.type' then
-          module_type = vim.treesitter.get_node_text(child_node, bufnr)
-        elseif child_capture == 'module.instance' then
-          instance_name = vim.treesitter.get_node_text(child_node, bufnr)
+      local start_row, start_col, end_row, end_col = node:range()
+
+      -- Get first child (module type)
+      local child = node:child(0)
+      if child and child:type() == "simple_identifier" then
+        module_type = vim.treesitter.get_node_text(child, bufnr)
+      end
+
+      -- Find instance name in children
+      for i = 0, node:child_count() - 1 do
+        local c = node:child(i)
+        if c:type() == "name_of_instance" then
+          -- Get the identifier inside name_of_instance
+          for j = 0, c:child_count() - 1 do
+            local name_child = c:child(j)
+            if name_child:type() == "simple_identifier" then
+              instance_name = vim.treesitter.get_node_text(name_child, bufnr)
+              break
+            end
+          end
+          break
         end
       end
-      
+
       if module_type and instance_name then
         table.insert(instantiations, {
           module_type = module_type,
           instance_name = instance_name,
-          line = line + 1,  -- 转换为 1-based
-          col = col,
+          line = start_row + 1,
+          col = start_col + 1,
+          end_line = end_row + 1,
+          end_col = end_col + 1,
         })
       end
     end
+
+    -- Traverse children
+    for i = 0, node:child_count() - 1 do
+      traverse(node:child(i))
+    end
   end
-  
+
+  traverse(root)
+
+  -- Sort by line number
+  table.sort(instantiations, function(a, b)
+    return a.line < b.line
+  end)
+
   return instantiations
 end
 
--- 回退解析方法（使用正则表达式）
--- @param bufnr number: 缓冲区编号
--- @return table: 例化信息列表
-function M.fallback_parse(bufnr)
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-  local instantiations = {}
-  
-  -- 匹配模块例化的正则表达式
-  -- 格式: module_type [#(params)] instance_name (ports);
-  local pattern = '(%w+)%s*[#%(].*%s+(%w+)%s*%('
-  
-  for line_num, line in ipairs(lines) do
-    -- 跳过注释行
-    if not line:match('^%s*//') and not line:match('^%s*%*') then
-      local module_type, instance_name = line:match(pattern)
-      
-      if module_type and instance_name then
-        -- 过滤掉 Verilog 关键字
-        local keywords = {
-          'module', 'endmodule', 'input', 'output', 'inout', 
-          'wire', 'reg', 'always', 'initial', 'if', 'else', 'case'
-        }
-        
-        local is_keyword = false
-        for _, kw in ipairs(keywords) do
-          if module_type == kw then
-            is_keyword = true
-            break
+-- Get module instantiations using LSP or treesitter fallback
+function M.get_instantiations(bufnr, callback)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+
+  -- Try LSP first
+  local client = get_verilog_lsp_client(bufnr)
+
+  if client then
+    -- Request document symbols from LSP
+    local params = {
+      textDocument = vim.lsp.util.make_text_document_params(bufnr)
+    }
+
+    client.request("textDocument/documentSymbol", params, function(err, result, ctx)
+      if err then
+        vim.notify("LSP request failed: " .. tostring(err), vim.log.levels.WARN)
+        -- Fallback to treesitter
+        local ts_result = parse_with_treesitter(bufnr)
+        if callback then
+          callback(ts_result)
+        end
+        return
+      end
+
+      if not result or vim.tbl_isempty(result) then
+        -- No symbols found, try treesitter
+        local ts_result = parse_with_treesitter(bufnr)
+        if callback then
+          callback(ts_result)
+        end
+        return
+      end
+
+      -- Parse the symbols
+      local instantiations = parse_symbols(result)
+
+      -- Sort by line number
+      table.sort(instantiations, function(a, b)
+        return a.line < b.line
+      end)
+
+      if callback then
+        callback(instantiations)
+      end
+    end, bufnr)
+
+    -- Return nil to indicate async operation
+    return nil
+  else
+    -- No LSP client, use treesitter directly
+    local result = parse_with_treesitter(bufnr)
+
+    if not result then
+      vim.notify("No LSP client found and treesitter parsing failed", vim.log.levels.ERROR)
+      return {}
+    end
+
+    if callback then
+      callback(result)
+    end
+    return result
+  end
+end
+
+-- Get the current module name using LSP or treesitter
+function M.get_current_module(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+
+  -- Try treesitter first for module name (simpler and faster)
+  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, "verilog")
+  if parser_ok then
+    local tree = parser:parse()[1]
+    local root = tree:root()
+
+    -- Find module declaration
+    local function find_module(node)
+      if node:type() == "module_declaration" then
+        -- Get module name (usually second child after "module" keyword)
+        for i = 0, node:child_count() - 1 do
+          local child = node:child(i)
+          if child:type() == "simple_identifier" then
+            return vim.treesitter.get_node_text(child, bufnr)
           end
         end
-        
-        if not is_keyword then
-          table.insert(instantiations, {
-            module_type = module_type,
-            instance_name = instance_name,
-            line = line_num,
-            col = 0,
-          })
+      end
+
+      -- Search children
+      for i = 0, node:child_count() - 1 do
+        local result = find_module(node:child(i))
+        if result then
+          return result
         end
       end
-    end
-  end
-  
-  return instantiations
-end
 
--- 解析当前缓冲区并返回例化列表
--- @param bufnr number: 缓冲区编号
--- @return table: 例化信息列表，每项包含 {module_type, instance_name, line, col}
-function M.parse_instantiations(bufnr)
-  bufnr = bufnr or vim.api.nvim_get_current_buf()
-  
-  -- 检查是否是 Verilog 文件
-  local filetype = vim.api.nvim_buf_get_option(bufnr, 'filetype')
-  if filetype ~= 'verilog' and filetype ~= 'systemverilog' then
-    return nil, "Not a Verilog file"
-  end
-  
-  local instantiations = nil
-  local error_msg = nil
-  
-  -- 尝试使用 Tree-sitter
-  if M.is_treesitter_available() then
-    local ok, result = pcall(parse_with_treesitter, bufnr)
-    if ok and result then
-      instantiations = result
-    else
-      error_msg = "Tree-sitter parsing failed"
+      return nil
+    end
+
+    local module_name = find_module(root)
+    if module_name then
+      return module_name
     end
   end
-  
-  -- 回退到正则表达式解析
-  if not instantiations then
-    local config = require('verilog-hierarchy.config')
-    if config.get('parser.fallback_regex') then
-      instantiations = M.fallback_parse(bufnr)
-      if error_msg then
-        vim.notify("Tree-sitter not available, using fallback parser", vim.log.levels.WARN)
-      end
-    else
-      return nil, error_msg or "Tree-sitter not available and fallback disabled"
+
+  -- Fallback: try to extract from buffer name or first line
+  local filename = vim.api.nvim_buf_get_name(bufnr)
+  if filename then
+    local name = filename:match("([^/\\]+)%.s?v$")
+    if name then
+      return name
     end
   end
-  
-  return instantiations, nil
+
+  return "Unknown"
 end
 
 return M

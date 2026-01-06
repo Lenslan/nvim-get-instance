@@ -1,66 +1,97 @@
--- 快速测试脚本 - 验证插件基本功能
--- 使用方法: nvim -u scripts/test_plugin.lua examples/sample.v
+-- Test script for verilog-hierarchy plugin
+-- Usage: Open examples/sample.v and run :luafile scripts/test_plugin.lua
 
--- 设置 runtimepath
-vim.opt.runtimepath:prepend(vim.fn.getcwd())
+print("=== Testing verilog-hierarchy plugin ===")
 
--- 加载插件
-local ok, verilog_hierarchy = pcall(require, 'verilog-hierarchy')
-if not ok then
-  print("❌ 加载插件失败")
-  vim.cmd('quit')
+-- Test 1: Check if plugin can be loaded
+print("\n[Test 1] Loading plugin...")
+local ok, verilog_hierarchy = pcall(require, "verilog-hierarchy")
+if ok then
+  print("✓ Plugin loaded successfully")
+else
+  print("✗ Failed to load plugin: " .. tostring(verilog_hierarchy))
   return
 end
 
-print("✅ 插件加载成功")
+-- Test 2: Check parser module
+print("\n[Test 2] Loading parser module...")
+local parser_ok, parser = pcall(require, "verilog-hierarchy.parser")
+if parser_ok then
+  print("✓ Parser module loaded")
+else
+  print("✗ Failed to load parser: " .. tostring(parser))
+  return
+end
 
--- 初始化插件
-verilog_hierarchy.setup({
-  keymaps = {
-    show_hierarchy = '<leader>vh',
-    jump_to_def = '<leader>vd',
-  },
-})
+-- Test 3: Test get_current_module
+print("\n[Test 3] Getting current module name...")
+local bufnr = vim.api.nvim_get_current_buf()
+local filetype = vim.api.nvim_buf_get_option(bufnr, "filetype")
+print("  Buffer filetype: " .. filetype)
 
-print("✅ 插件初始化成功")
+if filetype ~= "verilog" and filetype ~= "systemverilog" then
+  print("✗ Not a Verilog file. Please open examples/sample.v first")
+  return
+end
 
--- 测试配置模块
-local config = require('verilog-hierarchy.config')
-assert(config.get('ui.window_type') == 'float', "配置测试失败")
-print("✅ 配置模块测试通过")
+local module_name = parser.get_current_module(bufnr)
+print("  Module name: " .. tostring(module_name))
+if module_name and module_name ~= "Unknown" then
+  print("✓ Module name detected")
+else
+  print("⚠ Module name could not be detected")
+end
 
--- 测试解析器模块
-local parser = require('verilog-hierarchy.parser')
-print("✅ 解析器模块加载成功")
+-- Test 4: Test get_instantiations
+print("\n[Test 4] Getting module instantiations...")
+print("  This may take a moment if using LSP...")
 
--- 如果打开了文件，尝试解析
-vim.defer_fn(function()
-  local bufnr = vim.api.nvim_get_current_buf()
-  local filetype = vim.api.nvim_buf_get_option(bufnr, 'filetype')
-  
-  if filetype == 'verilog' or filetype == 'systemverilog' then
-    print("📄 检测到 Verilog 文件")
-    
-    local instantiations, err = parser.parse_instantiations(bufnr)
-    
-    if err then
-      print("⚠️  解析错误: " .. err)
-    elseif instantiations and #instantiations > 0 then
-      print("✅ 找到 " .. #instantiations .. " 个模块例化:")
-      for i, inst in ipairs(instantiations) do
-        print(string.format("  %d. [%d] %s %s", 
-          i, inst.line, inst.module_type, inst.instance_name))
-      end
-    else
-      print("ℹ️  未找到模块例化")
+parser.get_instantiations(bufnr, function(instantiations)
+  if not instantiations then
+    print("✗ Failed to get instantiations")
+    return
+  end
+
+  print("  Found " .. #instantiations .. " instantiation(s)")
+
+  if #instantiations > 0 then
+    print("✓ Instantiations detected:")
+    for i, inst in ipairs(instantiations) do
+      print(string.format("    %d. %s (type: %s) at line %d",
+        i, inst.instance_name, inst.module_type, inst.line))
     end
   else
-    print("ℹ️  当前文件不是 Verilog 文件")
+    print("⚠ No instantiations found")
   end
-  
-  print("\n🎉 所有测试完成！")
-  print("\n使用方法:")
-  print("  - 按 <leader>vh 显示模块层级")
-  print("  - 按 <leader>vd 跳转到模块定义")
-  print("  - 或运行 :VerilogHierarchy 命令")
-end, 100)
+
+  -- Test 5: Test UI module
+  print("\n[Test 5] Testing UI module...")
+  local ui_ok, ui = pcall(require, "verilog-hierarchy.ui")
+  if ui_ok then
+    print("✓ UI module loaded")
+
+    -- Try to open the UI
+    print("\n[Test 6] Opening hierarchy window...")
+    verilog_hierarchy.open()
+    print("  Check if a window appeared on the left/right")
+    print("  You should see the hierarchy window with instantiations")
+
+    vim.defer_fn(function()
+      if ui.is_open() then
+        print("✓ Hierarchy window is open")
+        print("\nTest window features:")
+        print("  - Press <CR> to jump to an instantiation")
+        print("  - Press 'q' or <Esc> to close")
+        print("  - Press <leader>vh to toggle")
+      else
+        print("⚠ Hierarchy window did not open")
+      end
+
+      print("\n=== Tests completed ===")
+      print("If the hierarchy window opened with instantiations, the plugin is working!")
+      print("Run :checkhealth verilog-hierarchy for more diagnostics")
+    end, 500)
+  else
+    print("✗ Failed to load UI module: " .. tostring(ui))
+  end
+end)

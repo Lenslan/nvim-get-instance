@@ -1,10 +1,15 @@
--- plugin/verilog-hierarchy.lua - 插件自动加载入口
+-- Plugin entry point
+-- This file is automatically loaded by Neovim when the plugin is installed
 
--- 防止重复加载
+if vim.fn.has("nvim-0.8.0") == 0 then
+  vim.api.nvim_err_writeln("verilog-hierarchy requires Neovim >= 0.8.0")
+  return
+end
+
+-- Prevent loading the plugin twice
 if vim.g.loaded_verilog_hierarchy then
   return
 end
 vim.g.loaded_verilog_hierarchy = 1
 
--- 插件会在用户调用 setup() 时初始化
--- 这里只是确保插件被 Neovim 识别
+-- The plugin will be set up by the user calling require("verilog-hierarchy").setup()

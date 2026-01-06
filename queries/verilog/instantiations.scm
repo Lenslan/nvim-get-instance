@@ -1,18 +1,7 @@
-; Tree-sitter 查询文件 - 匹配 Verilog 模块例化
+; Query for Verilog module instantiations
+; Captures module_instantiation nodes with module type and instance name
 
-; 匹配简单模块例化
-; 格式: module_type instance_name (port_connections);
 (module_instantiation
-  module: (simple_identifier) @module.type
-  instance: (name_of_instance
-    (instance_identifier) @module.instance)
-) @instantiation
-
-; 匹配带参数的模块例化
-; 格式: module_type #(parameters) instance_name (port_connections);
-(module_instantiation
-  module: (simple_identifier) @module.type
-  parameter_value_assignment: (_)
-  instance: (name_of_instance
-    (instance_identifier) @module.instance)
-) @instantiation
+  (simple_identifier) @module_type
+  (name_of_instance
+    instance_name: (simple_identifier) @instance_name)) @instantiation

@@ -1,131 +1,213 @@
--- ui.lua - 浮动窗口和用户界面模块
+local config = require("verilog-hierarchy.config")
+
 local M = {}
 
--- 当前窗口和缓冲区 ID
-M.win_id = nil
-M.buf_id = nil
+M.bufnr = nil
+M.winnr = nil
+M.source_bufnr = nil
 
--- 格式化例化项为显示字符串
--- @param inst table: 例化信息 {module_type, instance_name, line, col}
--- @return string: 格式化的字符串
-local function format_instantiation(inst)
-  return string.format("[%d] %s %s", inst.line, inst.module_type, inst.instance_name)
+-- Check if hierarchy window is open
+function M.is_open()
+  return M.winnr ~= nil and vim.api.nvim_win_is_valid(M.winnr)
 end
 
--- 创建浮动窗口缓冲区
--- @param instantiations table: 例化信息列表
--- @return number: 缓冲区 ID
-local function create_buffer(instantiations)
-  local buf = vim.api.nvim_create_buf(false, true)
-  
-  -- 设置缓冲区选项
-  vim.api.nvim_buf_set_option(buf, 'bufhidden', 'wipe')
-  vim.api.nvim_buf_set_option(buf, 'filetype', 'verilog-hierarchy')
-  
-  -- 格式化并设置内容
+-- Create and display the hierarchy window
+function M.open(instantiations, module_name, source_bufnr)
+  if M.is_open() then
+    return
+  end
+
+  M.source_bufnr = source_bufnr
+
+  -- Create a new buffer
+  M.bufnr = vim.api.nvim_create_buf(false, true)
+
+  -- Set buffer options
+  vim.api.nvim_buf_set_option(M.bufnr, "bufhidden", "wipe")
+  vim.api.nvim_buf_set_option(M.bufnr, "buftype", "nofile")
+  vim.api.nvim_buf_set_option(M.bufnr, "swapfile", false)
+  vim.api.nvim_buf_set_option(M.bufnr, "filetype", "verilog-hierarchy")
+  vim.api.nvim_buf_set_option(M.bufnr, "modifiable", false)
+
+  -- Calculate window size
+  local width = config.options.window.width
+  local height = vim.o.lines - 4
+
+  -- Create window based on position
+  local position = config.options.window.position
+  local win_config
+
+  if position == "left" then
+    vim.cmd("topleft vsplit")
+  else
+    vim.cmd("botright vsplit")
+  end
+
+  M.winnr = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(M.winnr, M.bufnr)
+  vim.api.nvim_win_set_width(M.winnr, width)
+
+  -- Set window options
+  vim.api.nvim_win_set_option(M.winnr, "number", config.options.display.show_line_numbers)
+  vim.api.nvim_win_set_option(M.winnr, "relativenumber", false)
+  vim.api.nvim_win_set_option(M.winnr, "cursorline", true)
+  vim.api.nvim_win_set_option(M.winnr, "wrap", false)
+  vim.api.nvim_win_set_option(M.winnr, "spell", false)
+
+  -- Render content
+  M.render(instantiations, module_name)
+
+  -- Set up keybindings
+  M.setup_keybindings()
+end
+
+-- Close the hierarchy window
+function M.close()
+  if M.winnr and vim.api.nvim_win_is_valid(M.winnr) then
+    vim.api.nvim_win_close(M.winnr, true)
+  end
+  M.winnr = nil
+  M.bufnr = nil
+  M.source_bufnr = nil
+end
+
+-- Render content in the buffer
+function M.render(instantiations, module_name)
+  if not M.bufnr or not vim.api.nvim_buf_is_valid(M.bufnr) then
+    return
+  end
+
   local lines = {}
-  for _, inst in ipairs(instantiations) do
-    table.insert(lines, format_instantiation(inst))
-  end
-  
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.api.nvim_buf_set_option(buf, 'modifiable', false)
-  
-  return buf
-end
+  local highlights = {}
 
--- 关闭浮动窗口
-function M.close_window()
-  if M.win_id and vim.api.nvim_win_is_valid(M.win_id) then
-    vim.api.nvim_win_close(M.win_id, true)
-  end
-  M.win_id = nil
-  M.buf_id = nil
-end
+  -- Title
+  local title = string.format("Module: %s", module_name or "Unknown")
+  table.insert(lines, title)
+  table.insert(lines, string.rep("─", #title))
+  table.insert(lines, "")
 
--- 设置窗口键盘映射
--- @param bufnr number: 缓冲区编号
--- @param instantiations table: 例化信息列表
--- @param on_select function: 选择回调函数
-local function setup_keymaps(bufnr, instantiations, on_select)
-  local opts = { noremap = true, silent = true, buffer = bufnr }
-  
-  -- 选择当前项
-  vim.keymap.set('n', '<CR>', function()
-    local line = vim.api.nvim_win_get_cursor(M.win_id)[1]
-    if line <= #instantiations then
-      on_select(instantiations[line])
-    end
-  end, opts)
-  
-  -- 关闭窗口
-  vim.keymap.set('n', 'q', M.close_window, opts)
-  vim.keymap.set('n', '<Esc>', M.close_window, opts)
-end
+  table.insert(highlights, { line = 0, col = 0, text = title, hl_group = "Title" })
 
--- 创建并显示浮动窗口
--- @param instantiations table: 例化信息列表
--- @param on_select function: 选择回调函数
--- @return number, number: 窗口 ID 和缓冲区 ID
-function M.show_hierarchy(instantiations, on_select)
   if not instantiations or #instantiations == 0 then
-    vim.notify("No module instantiations found in current file", vim.log.levels.INFO)
-    return nil, nil
+    table.insert(lines, "No instantiations found")
+    table.insert(highlights, { line = 3, col = 0, text = "No instantiations found", hl_group = "Comment" })
+  else
+    local icons = config.options.display.icons
+    local indent = config.options.display.indent
+
+    for i, inst in ipairs(instantiations) do
+      local line_text = string.format(
+        "%s%s %s (line %d)",
+        indent,
+        icons.instance,
+        inst.instance_name,
+        inst.line
+      )
+      table.insert(lines, line_text)
+
+      local detail_text = string.format("%s%sType: %s", indent, indent, inst.module_type)
+      table.insert(lines, detail_text)
+      table.insert(lines, "")
+
+      -- Store line mapping for jump functionality
+      if not M.line_map then
+        M.line_map = {}
+      end
+      M.line_map[#lines - 2] = inst.line
+
+      -- Add highlights
+      table.insert(highlights, {
+        line = #lines - 3,
+        col = #indent,
+        end_col = #indent + #icons.instance + #inst.instance_name,
+        hl_group = "Function",
+      })
+
+      table.insert(highlights, {
+        line = #lines - 2,
+        col = #indent + #indent + 6,
+        end_col = #indent + #indent + 6 + #inst.module_type,
+        hl_group = "Type",
+      })
+    end
   end
-  
-  -- 关闭已存在的窗口
-  M.close_window()
-  
-  -- 创建缓冲区
-  local buf = create_buffer(instantiations)
-  M.buf_id = buf
-  
-  -- 获取配置
-  local config = require('verilog-hierarchy.config')
-  local width_ratio = config.get('ui.width_ratio') or 0.6
-  local height_ratio = config.get('ui.height_ratio') or 0.5
-  local border = config.get('ui.border') or 'rounded'
-  
-  -- 计算窗口大小和位置
-  local width = math.floor(vim.o.columns * width_ratio)
-  local height = math.min(#instantiations + 2, math.floor(vim.o.lines * height_ratio))
-  local row = math.floor((vim.o.lines - height) / 2)
-  local col = math.floor((vim.o.columns - width) / 2)
-  
-  -- 窗口配置
-  local win_config = {
-    relative = 'editor',
-    width = width,
-    height = height,
-    row = row,
-    col = col,
-    style = 'minimal',
-    border = border,
-    title = ' Module Instantiations ',
-    title_pos = 'center',
-  }
-  
-  -- 创建窗口
-  local ok, win = pcall(vim.api.nvim_open_win, buf, true, win_config)
-  if not ok then
-    vim.notify("Failed to create floating window", vim.log.levels.ERROR)
-    return nil, nil
+
+  -- Set buffer content
+  vim.api.nvim_buf_set_option(M.bufnr, "modifiable", true)
+  vim.api.nvim_buf_set_lines(M.bufnr, 0, -1, false, lines)
+  vim.api.nvim_buf_set_option(M.bufnr, "modifiable", false)
+
+  -- Apply highlights
+  local ns_id = vim.api.nvim_create_namespace("verilog-hierarchy")
+  vim.api.nvim_buf_clear_namespace(M.bufnr, ns_id, 0, -1)
+
+  for _, hl in ipairs(highlights) do
+    vim.api.nvim_buf_add_highlight(
+      M.bufnr,
+      ns_id,
+      hl.hl_group,
+      hl.line,
+      hl.col,
+      hl.end_col or -1
+    )
   end
-  
-  M.win_id = win
-  
-  -- 设置窗口选项
-  vim.api.nvim_win_set_option(win, 'cursorline', true)
-  vim.api.nvim_win_set_option(win, 'number', false)
-  vim.api.nvim_win_set_option(win, 'relativenumber', false)
-  
-  -- 设置键盘映射
-  setup_keymaps(buf, instantiations, on_select)
-  
-  -- 设置光标到第一行
-  vim.api.nvim_win_set_cursor(win, {1, 0})
-  
-  return win, buf
+end
+
+-- Set up keybindings for the hierarchy window
+function M.setup_keybindings()
+  if not M.bufnr or not vim.api.nvim_buf_is_valid(M.bufnr) then
+    return
+  end
+
+  local opts = { noremap = true, silent = true, buffer = M.bufnr }
+
+  -- Jump to instantiation
+  vim.keymap.set("n", config.options.keybindings.jump, function()
+    M.jump_to_instantiation()
+  end, opts)
+
+  -- Close window
+  vim.keymap.set("n", config.options.keybindings.close, function()
+    M.close()
+  end, opts)
+
+  -- Also close with <Esc>
+  vim.keymap.set("n", "<Esc>", function()
+    M.close()
+  end, opts)
+end
+
+-- Jump to the instantiation in the source file
+function M.jump_to_instantiation()
+  if not M.line_map or not M.source_bufnr then
+    return
+  end
+
+  local current_line = vim.api.nvim_win_get_cursor(M.winnr)[1]
+  local target_line = M.line_map[current_line]
+
+  if target_line then
+    -- Find window with source buffer
+    local source_win = nil
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_get_buf(win) == M.source_bufnr and win ~= M.winnr then
+        source_win = win
+        break
+      end
+    end
+
+    if source_win then
+      vim.api.nvim_set_current_win(source_win)
+      vim.api.nvim_win_set_cursor(source_win, { target_line, 0 })
+      vim.cmd("normal! zz")
+    else
+      -- If no window found, close hierarchy and open in current window
+      M.close()
+      vim.api.nvim_set_current_buf(M.source_bufnr)
+      vim.api.nvim_win_set_cursor(0, { target_line, 0 })
+      vim.cmd("normal! zz")
+    end
+  end
 end
 
 return M

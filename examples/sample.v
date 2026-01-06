@@ -1,95 +1,127 @@
-// 示例 Verilog 文件 - 用于测试插件功能
+// Sample Verilog file for testing verilog-hierarchy plugin
+// This file demonstrates various module instantiation patterns
 
-module top (
-  input wire clk,
-  input wire rst_n,
-  input wire [7:0] data_in,
-  output wire [15:0] data_out
+module top_module (
+    input wire clk,
+    input wire rst_n,
+    input wire [7:0] data_in,
+    output wire [7:0] data_out,
+    output wire ready
 );
 
-  // 内部信号
-  wire [7:0] adder_out;
-  wire [7:0] mult_out;
-  wire [15:0] regfile_out;
-  
-  // 简单例化（不带参数）
-  adder u_adder (
-    .clk(clk),
-    .a(data_in),
-    .b(8'h01),
-    .sum(adder_out)
-  );
-  
-  // 参数化例化
-  multiplier #(
-    .WIDTH(8),
-    .SIGNED(0)
-  ) u_mult (
-    .clk(clk),
-    .rst_n(rst_n),
-    .a(adder_out),
-    .b(8'h02),
-    .product(mult_out)
-  );
-  
-  // 另一个参数化例化
-  register_file #(
-    .DATA_WIDTH(16),
-    .DEPTH(16),
-    .ADDR_WIDTH(4)
-  ) u_regfile (
-    .clk(clk),
-    .rst_n(rst_n),
-    .wr_en(1'b1),
-    .wr_addr(4'h0),
-    .wr_data({mult_out, mult_out}),
-    .rd_addr(4'h0),
-    .rd_data(regfile_out)
-  );
-  
-  // 多个相同模块的例化
-  mux2to1 u_mux0 (
-    .sel(rst_n),
-    .in0(regfile_out[7:0]),
-    .in1(regfile_out[15:8]),
-    .out(data_out[7:0])
-  );
-  
-  mux2to1 u_mux1 (
-    .sel(~rst_n),
-    .in0(8'h00),
-    .in1(8'hFF),
-    .out(data_out[15:8])
-  );
+    wire [7:0] processed_data;
+    wire valid;
+    wire [15:0] intermediate;
+
+    // Simple instantiation
+    data_processor proc_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .data_in(data_in),
+        .data_out(processed_data),
+        .valid(valid)
+    );
+
+    // Instantiation with parameters
+    fifo #(
+        .WIDTH(8),
+        .DEPTH(16)
+    ) fifo_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .wr_data(processed_data),
+        .wr_en(valid),
+        .rd_data(data_out),
+        .full(),
+        .empty()
+    );
+
+    // Multiple instances of the same module
+    register reg_stage1 (
+        .clk(clk),
+        .rst_n(rst_n),
+        .d(data_in),
+        .q(intermediate[7:0])
+    );
+
+    register reg_stage2 (
+        .clk(clk),
+        .rst_n(rst_n),
+        .d(processed_data),
+        .q(intermediate[15:8])
+    );
+
+    // Instantiation with array
+    output_controller ctrl_inst (
+        .clk(clk),
+        .rst_n(rst_n),
+        .data(intermediate),
+        .ready(ready)
+    );
 
 endmodule
 
-// 子模块定义（用于测试跳转功能）
-module adder (
-  input wire clk,
-  input wire [7:0] a,
-  input wire [7:0] b,
-  output reg [7:0] sum
+// Supporting modules for demonstration
+module data_processor (
+    input wire clk,
+    input wire rst_n,
+    input wire [7:0] data_in,
+    output reg [7:0] data_out,
+    output reg valid
 );
-  always @(posedge clk) begin
-    sum <= a + b;
-  end
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            data_out <= 8'h0;
+            valid <= 1'b0;
+        end else begin
+            data_out <= data_in + 8'h1;
+            valid <= 1'b1;
+        end
+    end
 endmodule
 
-module multiplier #(
-  parameter WIDTH = 8,
-  parameter SIGNED = 0
+module fifo #(
+    parameter WIDTH = 8,
+    parameter DEPTH = 16
 ) (
-  input wire clk,
-  input wire rst_n,
-  input wire [WIDTH-1:0] a,
-  input wire [WIDTH-1:0] b,
-  output reg [WIDTH-1:0] product
+    input wire clk,
+    input wire rst_n,
+    input wire [WIDTH-1:0] wr_data,
+    input wire wr_en,
+    output wire [WIDTH-1:0] rd_data,
+    output wire full,
+    output wire empty
 );
-  always @(posedge clk or negedge rst_n) begin
-    if (!rst_n)
-      product <= {WIDTH{1'b0}};
-    else
-      product <= a * b;
-  end
+    // FIFO implementation here
+    assign rd_data = wr_data;
+    assign full = 1'b0;
+    assign empty = 1'b1;
+endmodule
+
+module register (
+    input wire clk,
+    input wire rst_n,
+    input wire [7:0] d,
+    output reg [7:0] q
+);
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            q <= 8'h0;
+        else
+            q <= d;
+    end
+endmodule
+
+module output_controller (
+    input wire clk,
+    input wire rst_n,
+    input wire [15:0] data,
+    output reg ready
+);
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            ready <= 1'b0;
+        else
+            ready <= |data;
+    end
 endmodule
