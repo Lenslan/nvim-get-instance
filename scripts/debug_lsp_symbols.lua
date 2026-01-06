@@ -1,11 +1,40 @@
--- Debug script to inspect LSP symbols
+-- Debug script to inspect LSP symbols and treesitter validation
 -- Run this in Neovim with :luafile scripts/debug_lsp_symbols.lua
+
+local function verify_instantiation_at_line(bufnr, line)
+  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, "verilog")
+  if not parser_ok then
+    return false, "No treesitter parser"
+  end
+
+  local tree = parser:parse()[1]
+  local root = tree:root()
+  local target_line = line - 1
+
+  local function find_instantiation_at_line(node)
+    local start_row, _, end_row, _ = node:range()
+    if start_row <= target_line and target_line <= end_row then
+      if node:type() == "module_instantiation" then
+        return true, node:type()
+      end
+      for i = 0, node:child_count() - 1 do
+        local found, node_type = find_instantiation_at_line(node:child(i))
+        if found then
+          return found, node_type
+        end
+      end
+    end
+    return false, nil
+  end
+
+  return find_instantiation_at_line(root)
+end
 
 local function inspect_lsp_symbols()
   local bufnr = vim.api.nvim_get_current_buf()
   local filetype = vim.api.nvim_buf_get_option(bufnr, "filetype")
 
-  print("=== LSP Symbol Inspector ===")
+  print("=== LSP Symbol Inspector with Treesitter Validation ===")
   print("Buffer: " .. bufnr)
   print("Filetype: " .. filetype)
   print("")
@@ -54,15 +83,16 @@ local function inspect_lsp_symbols()
       return
     end
 
-    print("=== LSP Symbols ===")
+    print("=== LSP Symbols with Treesitter Validation ===")
     print("Total symbols: " .. #result)
     print("")
 
-    local filtered_count = 0
+    local filtered_by_detail = 0
+    local filtered_by_treesitter = 0
     local instantiation_count = 0
 
-    -- Helper to check if should be filtered
-    local function should_filter(symbol)
+    -- Helper to check if should be filtered by detail
+    local function should_filter_by_detail(symbol)
       if not symbol.detail then
         return false
       end
@@ -82,28 +112,52 @@ local function inspect_lsp_symbols()
       indent = indent or 0
       local prefix = string.rep("  ", indent)
 
-      local is_filtered = should_filter(symbol)
-      local filter_marker = is_filtered and "[FILTERED] " or ""
+      local has_detail = symbol.detail ~= nil
+      local is_filtered_by_detail = should_filter_by_detail(symbol)
+      local filter_marker = ""
+      local kind = symbol.kind
 
-      print(prefix .. filter_marker .. "Symbol: " .. symbol.name)
-      print(prefix .. "  Kind: " .. symbol.kind)
-      if symbol.detail then
+      print(prefix .. "Symbol: " .. symbol.name)
+      print(prefix .. "  Kind: " .. kind)
+
+      if has_detail then
         print(prefix .. "  Detail: " .. symbol.detail)
+      else
+        print(prefix .. "  Detail: (none)")
       end
+
       if symbol.range then
         local range = symbol.range
-        print(prefix .. "  Range: L" .. (range.start.line + 1) .. ":" .. (range.start.character + 1))
-      end
+        local line = range.start.line + 1
+        print(prefix .. "  Range: L" .. line .. ":" .. (range.start.character + 1))
 
-      -- Check if this looks like a module instantiation
-      local kind = symbol.kind
-      if kind == 8 or kind == 13 then
-        if is_filtered then
-          print(prefix .. "  >>> Filtered out (signal declaration)")
-          filtered_count = filtered_count + 1
-        else
-          print(prefix .. "  >>> Possible instantiation!")
-          instantiation_count = instantiation_count + 1
+        -- Check with treesitter if it's kind 8 or 13
+        if kind == 8 or kind == 13 then
+          if is_filtered_by_detail then
+            print(prefix .. "  >>> [FILTERED BY DETAIL] Signal declaration")
+            filtered_by_detail = filtered_by_detail + 1
+          else
+            -- Verify with treesitter
+            local is_inst, node_type = verify_instantiation_at_line(bufnr, line)
+            if has_detail then
+              if is_inst then
+                print(prefix .. "  >>> [PASS] Has detail + treesitter confirms: module_instantiation")
+                instantiation_count = instantiation_count + 1
+              else
+                print(prefix .. "  >>> [UNCERTAIN] Has detail but treesitter doesn't confirm")
+                instantiation_count = instantiation_count + 1  -- Still count it
+              end
+            else
+              -- No detail - rely on treesitter
+              if is_inst then
+                print(prefix .. "  >>> [PASS] No detail but treesitter confirms: module_instantiation")
+                instantiation_count = instantiation_count + 1
+              else
+                print(prefix .. "  >>> [FILTERED BY TREESITTER] No detail + not module_instantiation")
+                filtered_by_treesitter = filtered_by_treesitter + 1
+              end
+            end
+          end
         end
       end
 
@@ -122,8 +176,14 @@ local function inspect_lsp_symbols()
 
     print("=== Summary ===")
     print("Total symbols: " .. #result)
-    print("Filtered out (signals): " .. filtered_count)
+    print("Filtered by detail (signals): " .. filtered_by_detail)
+    print("Filtered by treesitter: " .. filtered_by_treesitter)
     print("Module instantiations: " .. instantiation_count)
+    print("")
+    print("Strategy:")
+    print("  - If symbol has detail: use detail to filter reg/wire/logic")
+    print("  - If no detail + kind 8/13: use treesitter to verify")
+    print("  - Only symbols verified as module_instantiation are shown")
     print("")
     print("=== End of Symbols ===")
   end, bufnr)

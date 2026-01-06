@@ -17,8 +17,46 @@ local function get_verilog_lsp_client(bufnr)
   return nil
 end
 
+-- Verify if a position is a module instantiation using treesitter
+local function verify_instantiation_at_line(bufnr, line)
+  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, "verilog")
+  if not parser_ok then
+    return false
+  end
+
+  local tree = parser:parse()[1]
+  local root = tree:root()
+
+  -- Convert 1-indexed line to 0-indexed for treesitter
+  local target_line = line - 1
+
+  -- Find node at target line
+  local function find_instantiation_at_line(node)
+    local start_row, _, end_row, _ = node:range()
+
+    -- Check if this node contains the target line
+    if start_row <= target_line and target_line <= end_row then
+      -- Check if this node or any parent is a module_instantiation
+      if node:type() == "module_instantiation" then
+        return true
+      end
+
+      -- Check children
+      for i = 0, node:child_count() - 1 do
+        if find_instantiation_at_line(node:child(i)) then
+          return true
+        end
+      end
+    end
+
+    return false
+  end
+
+  return find_instantiation_at_line(root)
+end
+
 -- Parse document symbols to extract module instantiations
-local function parse_symbols(symbols, instantiations)
+local function parse_symbols(symbols, instantiations, bufnr)
   instantiations = instantiations or {}
 
   if not symbols then
@@ -38,21 +76,16 @@ local function parse_symbols(symbols, instantiations)
     -- 14=Constant, 15=String, 16=Number, 17=Boolean, 18=Array, 19=Object,
     -- 20=Key, 21=Null, 22=EnumMember, 23=Struct, 24=Event, 25=Operator, 26=TypeParameter
 
-    -- For Verilog, module instances are often reported as:
-    -- - kind 13 (Variable) for instance declarations
-    -- - kind 8 (Field) for module instances
-    -- We'll look for symbols that have detail containing module type info
-
     local is_instantiation = false
     local module_type = nil
     local instance_name = name
 
-    -- Filter out reg/wire/logic signal definitions
-    -- These should NOT be considered as instantiations
+    -- Strategy: If LSP provides detail, use it for filtering
+    -- If no detail, use treesitter to verify it's really an instantiation
     if symbol.detail then
       local detail = symbol.detail:lower()
 
-      -- Skip if detail contains signal type keywords
+      -- Filter out reg/wire/logic signal definitions
       if detail:match("^reg%s") or detail:match("^wire%s") or
          detail:match("^logic%s") or detail:match("^integer%s") or
          detail:match("^bit%s") or detail:match("^byte%s") or
@@ -60,7 +93,7 @@ local function parse_symbols(symbols, instantiations)
          detail:match("^longint%s") or detail:match("^time%s") or
          detail:match("^realtime%s") or detail:match("^real%s") or
          detail:match("^shortreal%s") then
-        -- This is a signal declaration, not a module instantiation
+        -- This is a signal declaration, skip it
         goto continue
       end
 
@@ -68,40 +101,34 @@ local function parse_symbols(symbols, instantiations)
       if detail:match("^%[") then
         goto continue
       end
-    end
 
-    -- Check if the symbol has detail field (usually contains type info)
-    if symbol.detail then
       -- Try to extract module type from detail
-      -- Common patterns: "module_name instance_name" or "Type: module_name"
-      local detail = symbol.detail
-
-      -- Pattern 1: "module_type instance_name" - extract module_type
-      module_type = detail:match("^([%w_]+)%s+[%w_]+")
-
+      local detail_orig = symbol.detail
+      module_type = detail_orig:match("^([%w_]+)%s+[%w_]+")
       if not module_type then
-        -- Pattern 2: "Type: module_type" or similar
-        module_type = detail:match("[Tt]ype:%s*([%w_]+)")
+        module_type = detail_orig:match("[Tt]ype:%s*([%w_]+)")
       end
-
       if not module_type then
-        -- Pattern 3: Just use the detail as module type
-        module_type = detail:match("^([%w_]+)")
+        module_type = detail_orig:match("^([%w_]+)")
       end
 
       if module_type then
         is_instantiation = true
       end
+    else
+      -- No detail field - verible case
+      -- Use treesitter to verify if this is really a module instantiation
+      if (kind == 8 or kind == 13) and symbol.range then
+        local line = symbol.range.start.line + 1
+        if verify_instantiation_at_line(bufnr, line) then
+          is_instantiation = true
+          -- Try to get module type from treesitter
+          module_type = get_module_type_at_line(bufnr, line) or "unknown"
+        end
+      end
     end
 
-    -- Alternative: Check if kind indicates instance (Field or Variable in module context)
-    if not is_instantiation and (kind == 8 or kind == 13) then
-      -- If we have children or specific patterns, it might be an instantiation
-      is_instantiation = true
-      module_type = symbol.detail or "unknown"
-    end
-
-    if is_instantiation and module_type then
+    if is_instantiation then
       -- Get the range
       local range = symbol.range or symbol.location and symbol.location.range
       if range then
@@ -120,11 +147,49 @@ local function parse_symbols(symbols, instantiations)
 
     -- Recursively process children
     if symbol.children then
-      parse_symbols(symbol.children, instantiations)
+      parse_symbols(symbol.children, instantiations, bufnr)
     end
   end
 
   return instantiations
+end
+
+-- Get module type at a specific line using treesitter
+local function get_module_type_at_line(bufnr, line)
+  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, "verilog")
+  if not parser_ok then
+    return nil
+  end
+
+  local tree = parser:parse()[1]
+  local root = tree:root()
+  local target_line = line - 1
+
+  local function find_module_type(node)
+    local start_row, _, end_row, _ = node:range()
+
+    if start_row <= target_line and target_line <= end_row then
+      if node:type() == "module_instantiation" then
+        -- Get first child which should be the module type
+        local child = node:child(0)
+        if child and child:type() == "simple_identifier" then
+          return vim.treesitter.get_node_text(child, bufnr)
+        end
+      end
+
+      -- Check children
+      for i = 0, node:child_count() - 1 do
+        local result = find_module_type(node:child(i))
+        if result then
+          return result
+        end
+      end
+    end
+
+    return nil
+  end
+
+  return find_module_type(root)
 end
 
 -- Parse using treesitter as fallback
@@ -234,8 +299,8 @@ function M.get_instantiations(bufnr, callback)
         return
       end
 
-      -- Parse the symbols
-      local instantiations = parse_symbols(result)
+      -- Parse the symbols with bufnr for treesitter validation
+      local instantiations = parse_symbols(result, nil, bufnr)
 
       -- Sort by line number
       table.sort(instantiations, function(a, b)
