@@ -114,15 +114,19 @@ local function parse_symbols(symbols, instantiations, bufnr)
       -- Use treesitter to verify if this is really a module instantiation
       if (kind == 8 or kind == 13) and symbol.range then
         local line = symbol.range.start.line + 1
-        if verify_instantiation_at_line(bufnr, line) then
+        local verified = verify_instantiation_at_line(bufnr, line)
+        print(string.format("[DEBUG] Symbol '%s' at L%d: verified=%s", name, line, tostring(verified)))
+        if verified then
           is_instantiation = true
           -- Try to get module type from treesitter
           module_type = get_module_type_at_line(bufnr, line) or "unknown"
+          print(string.format("[DEBUG] Module type: '%s'", tostring(module_type)))
         end
       end
     end
 
     if is_instantiation then
+      print(string.format("[DEBUG] Adding instantiation: %s (%s) at L%d", instance_name, tostring(module_type), symbol.range.start.line + 1))
       -- Get the range
       local range = symbol.range or symbol.location and symbol.location.range
       if range then
@@ -134,6 +138,9 @@ local function parse_symbols(symbols, instantiations, bufnr)
           end_line = range["end"].line + 1,
           end_col = range["end"].character + 1,
         })
+        print(string.format("[DEBUG] Added! Total count: %d", #instantiations))
+      else
+        print("[DEBUG] No range found, skipped")
       end
     end
 
@@ -141,10 +148,12 @@ local function parse_symbols(symbols, instantiations, bufnr)
 
     -- Recursively process children
     if symbol.children then
+      print(string.format("[DEBUG] Symbol '%s' has %d children, processing recursively", name, #symbol.children))
       parse_symbols(symbol.children, instantiations, bufnr)
     end
   end
 
+  print(string.format("[DEBUG] parse_symbols returning %d instantiations", #instantiations))
   return instantiations
 end
 
@@ -294,6 +303,7 @@ function M.get_instantiations(bufnr, callback)
       end
 
       -- Parse the symbols with bufnr for treesitter validation
+      print(string.format("[DEBUG] LSP returned %d symbols, parsing...", #result))
       local instantiations = parse_symbols(result, nil, bufnr)
 
       -- Sort by line number
@@ -301,6 +311,7 @@ function M.get_instantiations(bufnr, callback)
         return a.line < b.line
       end)
 
+      print(string.format("[DEBUG] Final result: %d instantiations, calling callback", #instantiations))
       if callback then
         callback(instantiations)
       end
