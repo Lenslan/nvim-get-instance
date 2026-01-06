@@ -97,11 +97,10 @@ function M.render(instantiations, module_name)
 
     for i, inst in ipairs(instantiations) do
       local line_text = string.format(
-        "%s%s %s (%s) [line %d]",
+        "%s%s %s [%d]",
         indent,
         icons.instance,
         inst.instance_name,
-        inst.module_type,
         inst.line
       )
       table.insert(lines, line_text)
