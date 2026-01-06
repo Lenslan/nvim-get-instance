@@ -58,12 +58,34 @@ local function inspect_lsp_symbols()
     print("Total symbols: " .. #result)
     print("")
 
+    local filtered_count = 0
+    local instantiation_count = 0
+
+    -- Helper to check if should be filtered
+    local function should_filter(symbol)
+      if not symbol.detail then
+        return false
+      end
+
+      local detail = symbol.detail:lower()
+      if detail:match("^reg%s") or detail:match("^wire%s") or
+         detail:match("^logic%s") or detail:match("^integer%s") or
+         detail:match("^bit%s") or detail:match("^byte%s") or
+         detail:match("^%[") then
+        return true
+      end
+      return false
+    end
+
     -- Helper to print symbol tree
     local function print_symbol(symbol, indent)
       indent = indent or 0
       local prefix = string.rep("  ", indent)
 
-      print(prefix .. "Symbol: " .. symbol.name)
+      local is_filtered = should_filter(symbol)
+      local filter_marker = is_filtered and "[FILTERED] " or ""
+
+      print(prefix .. filter_marker .. "Symbol: " .. symbol.name)
       print(prefix .. "  Kind: " .. symbol.kind)
       if symbol.detail then
         print(prefix .. "  Detail: " .. symbol.detail)
@@ -76,7 +98,13 @@ local function inspect_lsp_symbols()
       -- Check if this looks like a module instantiation
       local kind = symbol.kind
       if kind == 8 or kind == 13 then
-        print(prefix .. "  >>> Possible instantiation!")
+        if is_filtered then
+          print(prefix .. "  >>> Filtered out (signal declaration)")
+          filtered_count = filtered_count + 1
+        else
+          print(prefix .. "  >>> Possible instantiation!")
+          instantiation_count = instantiation_count + 1
+        end
       end
 
       if symbol.children then
@@ -92,6 +120,11 @@ local function inspect_lsp_symbols()
       print_symbol(symbol)
     end
 
+    print("=== Summary ===")
+    print("Total symbols: " .. #result)
+    print("Filtered out (signals): " .. filtered_count)
+    print("Module instantiations: " .. instantiation_count)
+    print("")
     print("=== End of Symbols ===")
   end, bufnr)
 end

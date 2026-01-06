@@ -97,36 +97,36 @@ function M.render(instantiations, module_name)
 
     for i, inst in ipairs(instantiations) do
       local line_text = string.format(
-        "%s%s %s (line %d)",
+        "%s%s %s (%s) [line %d]",
         indent,
         icons.instance,
         inst.instance_name,
+        inst.module_type,
         inst.line
       )
       table.insert(lines, line_text)
-
-      local detail_text = string.format("%s%sType: %s", indent, indent, inst.module_type)
-      table.insert(lines, detail_text)
       table.insert(lines, "")
 
       -- Store line mapping for jump functionality
       if not M.line_map then
         M.line_map = {}
       end
-      M.line_map[#lines - 2] = inst.line
+      M.line_map[#lines - 1] = inst.line
 
-      -- Add highlights
+      -- Add highlights for instance name
       table.insert(highlights, {
-        line = #lines - 3,
+        line = #lines - 2,
         col = #indent,
         end_col = #indent + #icons.instance + #inst.instance_name,
         hl_group = "Function",
       })
 
+      -- Add highlights for module type
+      local type_start = #indent + #icons.instance + #inst.instance_name + 2  -- +2 for " ("
       table.insert(highlights, {
         line = #lines - 2,
-        col = #indent + #indent + 6,
-        end_col = #indent + #indent + 6 + #inst.module_type,
+        col = type_start,
+        end_col = type_start + #inst.module_type,
         hl_group = "Type",
       })
     end

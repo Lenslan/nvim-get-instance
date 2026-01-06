@@ -47,6 +47,29 @@ local function parse_symbols(symbols, instantiations)
     local module_type = nil
     local instance_name = name
 
+    -- Filter out reg/wire/logic signal definitions
+    -- These should NOT be considered as instantiations
+    if symbol.detail then
+      local detail = symbol.detail:lower()
+
+      -- Skip if detail contains signal type keywords
+      if detail:match("^reg%s") or detail:match("^wire%s") or
+         detail:match("^logic%s") or detail:match("^integer%s") or
+         detail:match("^bit%s") or detail:match("^byte%s") or
+         detail:match("^shortint%s") or detail:match("^int%s") or
+         detail:match("^longint%s") or detail:match("^time%s") or
+         detail:match("^realtime%s") or detail:match("^real%s") or
+         detail:match("^shortreal%s") then
+        -- This is a signal declaration, not a module instantiation
+        goto continue
+      end
+
+      -- Also skip if it looks like an array or bus declaration
+      if detail:match("^%[") then
+        goto continue
+      end
+    end
+
     -- Check if the symbol has detail field (usually contains type info)
     if symbol.detail then
       -- Try to extract module type from detail
@@ -92,6 +115,8 @@ local function parse_symbols(symbols, instantiations)
         })
       end
     end
+
+    ::continue::
 
     -- Recursively process children
     if symbol.children then
