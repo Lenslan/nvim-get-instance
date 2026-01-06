@@ -11,23 +11,25 @@ local function verify_instantiation_at_line(bufnr, line)
   local root = tree:root()
   local target_line = line - 1
 
-  local function find_instantiation_at_line(node)
-    local start_row, _, end_row, _ = node:range()
-    if start_row <= target_line and target_line <= end_row then
-      if node:type() == "module_instantiation" then
-        return true, node:type()
-      end
-      for i = 0, node:child_count() - 1 do
-        local found, node_type = find_instantiation_at_line(node:child(i))
-        if found then
-          return found, node_type
-        end
-      end
-    end
-    return false, nil
+  -- Get the smallest node at the target line
+  local node = root:descendant_for_range(target_line, 0, target_line, 999)
+
+  if not node then
+    return false, "No node at line"
   end
 
-  return find_instantiation_at_line(root)
+  -- Check if this node or any ancestor is module_instantiation
+  local current = node
+  local node_types = {}
+  while current do
+    table.insert(node_types, current:type())
+    if current:type() == "module_instantiation" then
+      return true, "Found module_instantiation ancestor: " .. table.concat(node_types, " <- ")
+    end
+    current = current:parent()
+  end
+
+  return false, "No module_instantiation ancestor. Path: " .. table.concat(node_types, " <- ")
 end
 
 local function inspect_lsp_symbols()
@@ -138,22 +140,26 @@ local function inspect_lsp_symbols()
             filtered_by_detail = filtered_by_detail + 1
           else
             -- Verify with treesitter
-            local is_inst, node_type = verify_instantiation_at_line(bufnr, line)
+            local is_inst, reason = verify_instantiation_at_line(bufnr, line)
             if has_detail then
               if is_inst then
-                print(prefix .. "  >>> [PASS] Has detail + treesitter confirms: module_instantiation")
+                print(prefix .. "  >>> [PASS] Has detail + treesitter confirms")
+                print(prefix .. "      " .. reason)
                 instantiation_count = instantiation_count + 1
               else
                 print(prefix .. "  >>> [UNCERTAIN] Has detail but treesitter doesn't confirm")
+                print(prefix .. "      " .. reason)
                 instantiation_count = instantiation_count + 1  -- Still count it
               end
             else
               -- No detail - rely on treesitter
               if is_inst then
-                print(prefix .. "  >>> [PASS] No detail but treesitter confirms: module_instantiation")
+                print(prefix .. "  >>> [PASS] No detail but treesitter confirms")
+                print(prefix .. "      " .. reason)
                 instantiation_count = instantiation_count + 1
               else
-                print(prefix .. "  >>> [FILTERED BY TREESITTER] No detail + not module_instantiation")
+                print(prefix .. "  >>> [FILTERED BY TREESITTER] Not module_instantiation")
+                print(prefix .. "      " .. reason)
                 filtered_by_treesitter = filtered_by_treesitter + 1
               end
             end

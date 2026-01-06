@@ -30,29 +30,23 @@ local function verify_instantiation_at_line(bufnr, line)
   -- Convert 1-indexed line to 0-indexed for treesitter
   local target_line = line - 1
 
-  -- Find node at target line
-  local function find_instantiation_at_line(node)
-    local start_row, _, end_row, _ = node:range()
+  -- Get the smallest node at the target line
+  local node = root:descendant_for_range(target_line, 0, target_line, 999)
 
-    -- Check if this node contains the target line
-    if start_row <= target_line and target_line <= end_row then
-      -- Check if this node or any parent is a module_instantiation
-      if node:type() == "module_instantiation" then
-        return true
-      end
-
-      -- Check children
-      for i = 0, node:child_count() - 1 do
-        if find_instantiation_at_line(node:child(i)) then
-          return true
-        end
-      end
-    end
-
+  if not node then
     return false
   end
 
-  return find_instantiation_at_line(root)
+  -- Check if this node or any ancestor is module_instantiation
+  local current = node
+  while current do
+    if current:type() == "module_instantiation" then
+      return true
+    end
+    current = current:parent()
+  end
+
+  return false
 end
 
 -- Parse document symbols to extract module instantiations
@@ -165,31 +159,31 @@ local function get_module_type_at_line(bufnr, line)
   local root = tree:root()
   local target_line = line - 1
 
-  local function find_module_type(node)
-    local start_row, _, end_row, _ = node:range()
+  -- Get the smallest node at the target line
+  local node = root:descendant_for_range(target_line, 0, target_line, 999)
 
-    if start_row <= target_line and target_line <= end_row then
-      if node:type() == "module_instantiation" then
-        -- Get first child which should be the module type
-        local child = node:child(0)
-        if child and child:type() == "simple_identifier" then
-          return vim.treesitter.get_node_text(child, bufnr)
-        end
-      end
-
-      -- Check children
-      for i = 0, node:child_count() - 1 do
-        local result = find_module_type(node:child(i))
-        if result then
-          return result
-        end
-      end
-    end
-
+  if not node then
     return nil
   end
 
-  return find_module_type(root)
+  -- Find the module_instantiation ancestor
+  local current = node
+  while current do
+    if current:type() == "module_instantiation" then
+      -- Found it! Now get the module type (first child should be the module identifier)
+      local first_child = current:child(0)
+      if first_child then
+        local ok, text = pcall(vim.treesitter.get_node_text, first_child, bufnr)
+        if ok then
+          return text
+        end
+      end
+      return nil
+    end
+    current = current:parent()
+  end
+
+  return nil
 end
 
 -- Parse using treesitter as fallback
