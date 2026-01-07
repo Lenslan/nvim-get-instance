@@ -1,5 +1,24 @@
 local M = {}
 
+-- Helper function to get treesitter parser (tries systemverilog first, then verilog)
+local function get_verilog_parser(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+
+  -- Try systemverilog first (tree-sitter-verilog uses this name)
+  local ok, parser = pcall(vim.treesitter.get_parser, bufnr, "systemverilog")
+  if ok then
+    return parser
+  end
+
+  -- Fallback to verilog
+  ok, parser = pcall(vim.treesitter.get_parser, bufnr, "systemverilog")
+  if ok then
+    return parser
+  end
+
+  return nil
+end
+
 -- Get LSP client for Verilog/SystemVerilog
 local function get_verilog_lsp_client(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
@@ -17,10 +36,48 @@ local function get_verilog_lsp_client(bufnr)
   return nil
 end
 
+-- Get module type at a specific line using treesitter
+local function get_module_type_at_line(bufnr, line)
+  local parser = get_verilog_parser(bufnr)
+  if not parser then
+    return nil
+  end
+
+  local tree = parser:parse()[1]
+  local root = tree:root()
+  local target_line = line - 1
+
+  -- Get the smallest node at the target line
+  local node = root:descendant_for_range(target_line, 0, target_line, 999)
+
+  if not node then
+    return nil
+  end
+
+  -- Find the module_instantiation ancestor
+  local current = node
+  while current do
+    if current:type() == "module_instantiation" then
+      -- Found it! Now get the module type (first child should be the module identifier)
+      local first_child = current:child(0)
+      if first_child then
+        local ok, text = pcall(vim.treesitter.get_node_text, first_child, bufnr)
+        if ok then
+          return text
+        end
+      end
+      return nil
+    end
+    current = current:parent()
+  end
+
+  return nil
+end
+
 -- Verify if a position is a module instantiation using treesitter
 local function verify_instantiation_at_line(bufnr, line)
-  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, "verilog")
-  if not parser_ok then
+  local parser = get_verilog_parser(bufnr)
+  if not parser then
     return false
   end
 
@@ -157,53 +214,10 @@ local function parse_symbols(symbols, instantiations, bufnr)
   return instantiations
 end
 
--- Get module type at a specific line using treesitter
-local function get_module_type_at_line(bufnr, line)
-  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, "verilog")
-  if not parser_ok then
-    return nil
-  end
-
-  local tree = parser:parse()[1]
-  local root = tree:root()
-  local target_line = line - 1
-
-  -- Get the smallest node at the target line
-  local node = root:descendant_for_range(target_line, 0, target_line, 999)
-
-  if not node then
-    return nil
-  end
-
-  -- Find the module_instantiation ancestor
-  local current = node
-  while current do
-    if current:type() == "module_instantiation" then
-      -- Found it! Now get the module type (first child should be the module identifier)
-      local first_child = current:child(0)
-      if first_child then
-        local ok, text = pcall(vim.treesitter.get_node_text, first_child, bufnr)
-        if ok then
-          return text
-        end
-      end
-      return nil
-    end
-    current = current:parent()
-  end
-
-  return nil
-end
-
 -- Parse using treesitter as fallback
 local function parse_with_treesitter(bufnr)
-  local ok, ts_utils = pcall(require, "nvim-treesitter.ts_utils")
-  if not ok then
-    return nil
-  end
-
-  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, "verilog")
-  if not parser_ok then
+  local parser = get_verilog_parser(bufnr)
+  if not parser then
     return nil
   end
 
@@ -340,8 +354,8 @@ function M.get_current_module(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
 
   -- Try treesitter first for module name (simpler and faster)
-  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, "verilog")
-  if parser_ok then
+  local parser = get_verilog_parser(bufnr)
+  if parser then
     local tree = parser:parse()[1]
     local root = tree:root()
 

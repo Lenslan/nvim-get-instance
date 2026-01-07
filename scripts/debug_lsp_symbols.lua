@@ -2,9 +2,14 @@
 -- Run this in Neovim with :luafile scripts/debug_lsp_symbols.lua
 
 local function verify_instantiation_at_line(bufnr, line)
-  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, "verilog")
-  if not parser_ok then
-    return false, "No treesitter parser"
+  -- Try systemverilog first (tree-sitter-verilog uses this name)
+  local ok, parser = pcall(vim.treesitter.get_parser, bufnr, "systemverilog")
+  if not ok then
+    -- Fallback to verilog
+    ok, parser = pcall(vim.treesitter.get_parser, bufnr, "verilog")
+    if not ok then
+      return false, "No treesitter parser"
+    end
   end
 
   local tree = parser:parse()[1]

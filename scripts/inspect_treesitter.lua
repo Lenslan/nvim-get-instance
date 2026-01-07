@@ -15,10 +15,13 @@ local function inspect_tree()
     return
   end
 
-  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, "verilog")
+  local parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, "systemverilog")
   if not parser_ok then
-    print("ERROR: No treesitter parser available")
-    return
+    parser_ok, parser = pcall(vim.treesitter.get_parser, bufnr, "verilog")
+    if not parser_ok then
+      print("ERROR: No treesitter parser available")
+      return
+    end
   end
 
   local tree = parser:parse()[1]
