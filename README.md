@@ -44,7 +44,7 @@
         position = "left", -- "left" 或 "right"
       },
       keybindings = {
-        toggle = "<leader>vh",  -- 切换层级窗口
+        toggle = "<leader>h",  -- 切换层级窗口
         jump = "<CR>",          -- 跳转到实例化行
         close = "q",            -- 关闭层级窗口
       },

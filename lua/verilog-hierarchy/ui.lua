@@ -104,29 +104,37 @@ function M.render(instantiations, module_name)
         inst.line
       )
       table.insert(lines, line_text)
-      table.insert(lines, "")
 
       -- Store line mapping for jump functionality
       if not M.line_map then
         M.line_map = {}
       end
-      M.line_map[#lines - 1] = inst.line
+      M.line_map[#lines] = inst.line
 
-      -- Add highlights for instance name
+      -- Calculate byte positions for highlighting
+      local current_line_idx = #lines - 1  -- 0-indexed for highlight API
+
+      -- Highlight instance name only (not the icon)
+      local icon_and_space_len = vim.fn.strlen(indent .. icons.instance .. " ")
+      local instance_name_len = vim.fn.strlen(inst.instance_name)
+
       table.insert(highlights, {
-        line = #lines - 2,
-        col = #indent,
-        end_col = #indent + #icons.instance + #inst.instance_name,
+        line = current_line_idx,
+        col = icon_and_space_len,
+        end_col = icon_and_space_len + instance_name_len,
         hl_group = "Function",
       })
 
-      -- Add highlights for module type
-      local type_start = #indent + #icons.instance + #inst.instance_name + 2  -- +2 for " ("
+      -- Highlight the line number in brackets
+      local bracket_pos = vim.fn.strlen(indent .. icons.instance .. " " .. inst.instance_name .. " [")
+      local line_num_str = tostring(inst.line)
+      local line_num_len = vim.fn.strlen(line_num_str)
+
       table.insert(highlights, {
-        line = #lines - 2,
-        col = type_start,
-        end_col = type_start + #inst.module_type,
-        hl_group = "Type",
+        line = current_line_idx,
+        col = bracket_pos,
+        end_col = bracket_pos + line_num_len,
+        hl_group = "Number",
       })
     end
   end
