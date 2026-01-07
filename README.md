@@ -31,7 +31,7 @@
 
 ```lua
 {
-  "your-username/verilog-hierarchy.nvim",
+  "Lenslan/nvim-get-instance",
   dependencies = {
     "nvim-treesitter/nvim-treesitter",
   },
